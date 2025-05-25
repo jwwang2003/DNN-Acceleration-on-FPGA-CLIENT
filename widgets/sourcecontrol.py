@@ -98,7 +98,7 @@ class SourceControlWidget(QWidget):
             )
             if files:
                 self.selected_paths = files
-                self.source_change_callback(source=files, mode=VideoModes.IMAGES)
+                self.source_change_callback(source=files, mode=VideoModes.IMAGES, image_list=self.selected_paths)
 
         self._update_path_label()
 

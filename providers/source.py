@@ -27,30 +27,13 @@ class FrameGrabber(QObject):
                 raise RuntimeError(f"Cannot open {mode.name} source {source}")
         else:
             self.cam = None
-
-    @Slot()
-    def start(self):
-        """Begin the capture loop in its own QThread."""
-        self.running = True
-
+    
     @Slot()
     def stop(self):
         """Stop the loop and release any camera/video handle."""
         self.running = False
         if self.cam:
             self.cam.release()
-
-    @Slot()
-    def next_frame(self):
-        """Manually advance one frame (VIDEO or IMAGES only)."""
-        if self.mode in (VideoModes.VIDEO, VideoModes.IMAGES):
-            self._grab_frame()
-
-    @Slot()
-    def capture_frame(self):
-        """Manually grab one frame from the webcam."""
-        if self.mode == VideoModes.WEBCAM:
-            self._grab_frame()
 
     def run(self):
         """Automatic loop for non-manual modes."""
@@ -59,12 +42,12 @@ class FrameGrabber(QObject):
             if (self.mode in (VideoModes.WEBCAM, VideoModes.VIDEO) and not self.manual) \
                or self.mode == VideoModes.IMAGES:
                 self._grab_frame()
-            # QThread.msleep(int(1000/30))  # ~30 FPS
+            QThread.msleep(int(1000/60))  # ~5 FPS
         if self.cam:
             self.cam.release()
 
     def _grab_frame(self):
-        """Internal single‐frame grab & emit."""
+        """Internal single-frame grab & emit."""
         if self.mode in (VideoModes.WEBCAM, VideoModes.VIDEO):
             ret, frame = self.cam.read()
             if not ret:
