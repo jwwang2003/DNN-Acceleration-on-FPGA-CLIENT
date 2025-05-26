@@ -1,4 +1,5 @@
 import cv2
+from collections import deque
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QWidget, QScrollArea, QLabel, QHBoxLayout, QVBoxLayout
@@ -17,9 +18,6 @@ class ThumbnailLabel(QLabel):
         self.setScaledContents(False)
 
     def rescale(self, height: int):
-        """
-        Rescale the stored pixmap to the given height, preserving aspect ratio.
-        """
         scaled = self._original.scaledToHeight(height, Qt.SmoothTransformation)
         self.setPixmap(scaled)
         self.setFixedSize(scaled.size())
@@ -28,12 +26,21 @@ class ThumbnailLabel(QLabel):
 class ROIViewerWidget(QWidget):
     """
     A horizontally-scrollable widget that displays ROIs emitted
-    from the BoundingBox processor, dynamically scaling thumbnails
-    to the height of the viewport.
+    from the BoundingBox processor. If inference is enabled and a
+    TCP client is provided, each ROI is first sent for classification,
+    then drawn with the result overlay.
     """
-    def __init__(self, parent=None, margin: int = 2):
+    def __init__(self, parent=None, tcp_client=None, inference_enabled=True, margin: int = 2):
         super().__init__(parent)
         self._margin = margin
+        self.tcp_client = tcp_client
+        self.inference_enabled = inference_enabled
+        self._roi_queue = deque()
+        self._current_roi = None
+
+        # Connect TCP classification signal
+        if self.tcp_client:
+            self.tcp_client.classification_result.connect(self._on_classification_result)
 
         # Main layout
         main_layout = QVBoxLayout(self)
@@ -66,7 +73,6 @@ class ROIViewerWidget(QWidget):
         self._rescale_thumbnails()
 
     def _rescale_thumbnails(self):
-        # Determine available height inside the scroll viewport
         height = self._scroll.viewport().height() - 2 * self._margin
         for i in range(self._hbox.count()):
             item = self._hbox.itemAt(i)
@@ -77,40 +83,68 @@ class ROIViewerWidget(QWidget):
     @Slot(object)
     def add_roi(self, roi_frame):
         """
-        Slot to receive one ROI (NumPy BGR array), convert to QPixmap,
-        scale to viewport height, and append it horizontally.
+        Convert BGR frame to QPixmap thumbnail and append.
         """
-        # Convert BGR to RGB and wrap in QPixmap
+        # BGR → RGB
         rgb = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb.shape
         bytes_per_line = ch * w
         qimg = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
         pix = QPixmap.fromImage(qimg)
 
-        # Create thumbnail label and scale to current height
         thumb = ThumbnailLabel(pix, self)
         height = self._scroll.viewport().height() - 2 * self._margin
         thumb.rescale(height)
-
         self._hbox.addWidget(thumb)
         self._scroll.widget().update()
 
     @Slot()
     def clear(self):
-        """
-        Clears all currently displayed ROIs.
-        """
         while self._hbox.count():
             item = self._hbox.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
-    @Slot(object)
+    @Slot(list)
     def set_rois(self, roi_list):
         """
-        Replace the current thumbnails with this list of ROI frames.
-        Clears first, then adds each ROI in order.
+        Replace current thumbnails. If inference is on, send each ROI
+        to the TCP client in turn, await its classification, then draw.
+        Otherwise draw immediately.
         """
         self.clear()
-        for roi in roi_list:
-            self.add_roi(roi)
+        
+        if self.inference_enabled and self.tcp_client:
+            print(f"[ROIViewer] Received {len(roi_list)} ROIs")
+            self._roi_queue.extend(roi_list)
+            self._process_next_roi()
+        else:
+            for roi in roi_list:
+                self.add_roi(roi)
+
+    def _process_next_roi(self):
+        if not self._roi_queue:
+            return
+        self._current_roi = self._roi_queue.popleft()
+        # send single-ROI batch for inference
+        self.tcp_client.send_rois([self._current_roi])
+
+    @Slot(int)
+    def _on_classification_result(self, result):
+        """
+        Receive one classification result, annotate the current ROI,
+        draw it, then proceed to the next ROI in queue.
+        """
+        roi = self._current_roi
+        # overlay result text on a copy
+        annotated = roi.copy()
+        cv2.putText(annotated,
+                    str(result),
+                    (5, 15),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 255, 0),
+                    1,
+                    cv2.LINE_AA)
+        self.add_roi(annotated)
+        self._process_next_roi()

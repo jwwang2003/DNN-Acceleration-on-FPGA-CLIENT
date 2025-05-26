@@ -1,81 +1,49 @@
 import socket
-from PySide6.QtCore import Qt, Signal, Slot, QThread, QObject
+import numpy as np
+from PySide6.QtCore import Signal, Slot
 from PySide6.QtWidgets import (
-    QWidget, QLineEdit, QPushButton, QFormLayout, QHBoxLayout, QMessageBox
+    QWidget, QLineEdit, QPushButton,
+    QFormLayout, QHBoxLayout, QMessageBox
 )
-
-
-class TCPWorker(QObject):
-    """Performs TCP connect/disconnect in a separate thread to avoid UI blocking."""
-    finished = Signal(bool, object)  # (success, socket_or_error)
-
-    def __init__(self, host: str, port: int, parent=None):
-        super().__init__(parent)
-        self.host = host
-        self.port = port
-        self._socket = None
-
-    @Slot()
-    def connect(self):
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(5.0)
-            s.connect((self.host, self.port))
-            self._socket = s
-            self.finished.emit(True, s)
-        except Exception as e:
-            self.finished.emit(False, e)
-
-    @Slot()
-    def disconnect(self):
-        if self._socket:
-            try:
-                self._socket.close()
-                self.finished.emit(True, None)
-            except Exception as e:
-                self.finished.emit(False, e)
-        else:
-            self.finished.emit(False, RuntimeError("No active socket"))
 
 
 class TCPWidget(QWidget):
     """
-    A QWidget that lets the user enter host & port, connect/disconnect,
-    and emits `state_changed(connected: bool)` for parent/global control.
+    Blocking TCP client: connect/disconnect and send ROIs in-place.
+    WARNING: all operations block the UI thread!
     """
-    state_changed = Signal(bool)          # True = connected, False = disconnected
-    error_occurred = Signal(str)          # Emitted on connection errors
+    # Signals you already wire up:
+    state_changed         = Signal(bool)    # True=connected, False=disconnected
+    classification_result = Signal(int)     # each ROI’s result
+    inference_complete    = Signal()        # after the last ROI
+    error_occurred        = Signal(str)     # on any socket error
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.connected = False
-        self._socket = None
-        self._thread = None
-        self._worker = None
+        self._sock = None
 
-        # --- UI Setup ---
-        self.host_input = QLineEdit("127.0.0.1")
-        self.port_input = QLineEdit("8000")
+        # --- UI ---
+        self.host_input    = QLineEdit("127.0.0.1")
+        self.port_input    = QLineEdit("8000")
         self.port_input.setFixedWidth(80)
-        self.connect_btn = QPushButton("Connect")
+        self.connect_btn    = QPushButton("Connect")
         self.disconnect_btn = QPushButton("Disconnect")
         self.disconnect_btn.setEnabled(False)
 
-        form = QFormLayout()
+        form = QFormLayout(self)
         form.addRow("Host:", self.host_input)
         form.addRow("Port:", self.port_input)
-        btn_layout = QHBoxLayout()
-        btn_layout.addWidget(self.connect_btn)
-        btn_layout.addWidget(self.disconnect_btn)
-        form.addRow(btn_layout)
-        self.setLayout(form)
+        btn_row = QHBoxLayout()
+        btn_row.addWidget(self.connect_btn)
+        btn_row.addWidget(self.disconnect_btn)
+        form.addRow(btn_row)
 
-        # --- Signals & Slots ---
-        self.connect_btn.clicked.connect(self._on_connect_clicked)
-        self.disconnect_btn.clicked.connect(self._on_disconnect_clicked)
+        # --- Signals ---
+        self.connect_btn.clicked.connect(self._on_connect)
+        self.disconnect_btn.clicked.connect(self._on_disconnect)
 
     @Slot()
-    def _on_connect_clicked(self):
+    def _on_connect(self):
         host = self.host_input.text().strip()
         try:
             port = int(self.port_input.text())
@@ -88,70 +56,74 @@ class TCPWidget(QWidget):
         self.host_input.setEnabled(False)
         self.port_input.setEnabled(False)
 
-        # spin up a worker thread for connect
-        self._worker = TCPWorker(host, port)
-        self._thread = QThread(self)
-        self._worker.moveToThread(self._thread)
-        self._worker.finished.connect(self._on_connect_result)
-        self._thread.started.connect(self._worker.connect)
-        self._thread.start()
-
-    @Slot(bool, object)
-    def _on_connect_result(self, success: bool, result):
-        self._thread.quit()
-        self._thread.wait()
-        if success:
-            self._socket = result
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5.0)
+            sock.connect((host, port))
+            self._sock = sock
             self._set_connected(True)
-        else:
-            self.error_occurred.emit(str(result))
-            QMessageBox.critical(self, "Connect Error", str(result))
-            self._restore_ui()
-        self._worker = None
-        self._thread = None
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+            QMessageBox.critical(self, "Connect Error", str(e))
+            # restore UI
+            self.connect_btn.setEnabled(True)
+            self.host_input.setEnabled(True)
+            self.port_input.setEnabled(True)
 
     @Slot()
-    def _on_disconnect_clicked(self):
-        if not self._socket:
+    def _on_disconnect(self):
+        if not self._sock:
             return
-        # disable UI while disconnecting
-        self.disconnect_btn.setEnabled(False)
-        self._worker = TCPWorker("", 0)
-        self._worker._socket = self._socket
-        self._thread = QThread(self)
-        self._worker.moveToThread(self._thread)
-        self._worker.finished.connect(self._on_disconnect_result)
-        self._thread.started.connect(self._worker.disconnect)
-        self._thread.start()
 
-    @Slot(bool, object)
-    def _on_disconnect_result(self, success: bool, _):
-        self._thread.quit()
-        self._thread.wait()
-        if success:
-            self._socket = None
+        try:
+            self._sock.close()
+            self._sock = None
             self._set_connected(False)
-        else:
-            QMessageBox.warning(self, "Disconnect Error", str(_))
-            self.disconnect_btn.setEnabled(True)
-        self._worker = None
-        self._thread = None
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+            QMessageBox.warning(self, "Disconnect Error", str(e))
 
     def _set_connected(self, state: bool):
-        self.connected = state
+        """Enable/disable UI elements and emit state_changed."""
         self.connect_btn.setEnabled(not state)
         self.disconnect_btn.setEnabled(state)
-        # re-enable host/port only when disconnected
         self.host_input.setEnabled(not state)
         self.port_input.setEnabled(not state)
         self.state_changed.emit(state)
 
-    def _restore_ui(self):
-        # Called on failed connect
-        self.connect_btn.setEnabled(True)
-        self.host_input.setEnabled(True)
-        self.port_input.setEnabled(True)
+    @Slot(list)
+    def send_rois(self, rois: list):
+        """
+        **Blocking**: for each ROI, send 4×1 KB float32 chunks with ACKs,
+        then read 1 KB result, emit classification_result, and finally
+        inference_complete.
+        """
+        if not self._sock or not rois:
+            self.inference_complete.emit()
+            return
 
-    def get_socket(self):
-        """Return the active socket, or None if disconnected."""
-        return self._socket
+        try:
+            for roi in rois:
+                # normalize to [0,1], cast float32, flatten
+                arr = (roi.astype(np.float32) / 255.0).ravel()
+                data = arr.tobytes()  # = 4096 bytes
+
+                # send in four 1024‐byte chunks
+                for i in range(4):
+                    chunk = data[1024*i : 1024*(i+1)]
+                    self._sock.sendall(chunk)
+                    # wait ACK after each of the first three
+                    if i < 3:
+                        _ = self._sock.recv(1024)
+
+                # final classification reply
+                result_bytes = self._sock.recv(1024)
+                result = int.from_bytes(result_bytes,
+                                        byteorder='little',
+                                        signed=False)
+                self.classification_result.emit(result)
+
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+        finally:
+            self.inference_complete.emit()
