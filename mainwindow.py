@@ -65,7 +65,7 @@ class MainWindow(QMainWindow):
         self.processor1.processed_frame.connect(self.video_widget.on_frame)
         
         # Side panel
-        self.source_control = SourceControlWidget(source_change_callback=self._start_grabber)
+        self.source_control = SourceControlWidget(play=self.grabber.run, stop=self.grabber.stop, source_change_callback=self._start_grabber)
         def on_tcp_state_changed(connected: bool):
             if connected:
                 print("Global: TCP is now connected!")
