@@ -105,23 +105,46 @@ class TCPWidget(QWidget):
         try:
             for roi in rois:
                 # normalize to [0,1], cast float32, flatten
-                arr = (roi.astype(np.float32) / 255.0).ravel()
-                data = arr.tobytes()  # = 4096 bytes
+                # arr = (roi.astype(np.float32) / 255.0).ravel()
+                # data = arr.tobytes()  # = 4096 bytes
+                
+                
+                image_value_32b_numpy = ((roi)/255.0).astype(np.float32)#.astype(np.uint8)
+                img_raw = image_value_32b_numpy.tobytes()#将图片转化为二进制格式
+                for i in range(1,5):#4个数据包,每个数据包1k,整个图片4kb float32 归一化 !!低地址存高字节
+                    self._sock.send(img_raw[1024*(i-1):1024*i])#发送图像矩阵
+                    packet_flag = -1#结果返回标志
+                    #第四个数据包是最后一个数据包,不用应答and i!=4
+                    while(packet_flag==-1 and i!=4):#等待FPGA确认接收到这个1K数据包则发送下一个数据包
+                        msg = self._sock.recv(1024)#接收来自FPGA 1字节验证数据,用于表示已经成功接收到1KB数据包
+                        packet_flag = 1                   
+                Result_flag = -1#结果返回标志
+                while(Result_flag==-1):
+                    msg = self._sock.recv(1024)#接收来自FPGA 1字节验证数据,用于表示已经成功接收到这张图片
+                    Result_flag = 1
+                    Result = int.from_bytes(msg,byteorder='little',signed=False)#bytes 转int byteorder 大端还是小端   
+                    self.classification_result.emit(Result)
+                #添加结果
+                
+                # for i range(1, 5):
+                    
+                #     if len(data) < 1024 * i:
+                #         raise ValueError(f"ROI data too short: {len(data)} bytes")
 
-                # send in four 1024‐byte chunks
-                for i in range(4):
-                    chunk = data[1024*i : 1024*(i+1)]
-                    self._sock.sendall(chunk)
-                    # wait ACK after each of the first three
-                    if i < 3:
-                        _ = self._sock.recv(1024)
+                # # send in four 1024‐byte chunks
+                # for i in range(4):
+                #     chunk = data[1024*i : 1024*(i+1)]
+                #     self._sock.sendall(chunk)
+                #     # wait ACK after each of the first three
+                #     if i < 3:
+                #         _ = self._sock.recv(1024)
 
-                # final classification reply
-                result_bytes = self._sock.recv(1024)
-                result = int.from_bytes(result_bytes,
-                                        byteorder='little',
-                                        signed=False)
-                self.classification_result.emit(result)
+                # # final classification reply
+                # result_bytes = self._sock.recv(1024)
+                # result = int.from_bytes(result_bytes,
+                #                         byteorder='little',
+                #                         signed=False)
+                # self.classification_result.emit(result)
 
         except Exception as e:
             self.error_occurred.emit(str(e))

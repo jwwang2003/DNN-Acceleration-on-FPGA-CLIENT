@@ -65,7 +65,12 @@ class MainWindow(QMainWindow):
         self.processor1.processed_frame.connect(self.video_widget.on_frame)
         
         # Side panel
-        self.source_control = SourceControlWidget(play=self.grabber.run, stop=self.grabber.stop, source_change_callback=self._start_grabber)
+        self.source_control = SourceControlWidget()
+        # self.source_control.sig_source_change.connect(self.grabber.change_source)
+        self.source_control.sig_start.connect(self.grabber.run)
+        self.source_control.sig_pause.connect(self.grabber.stop)
+        self.source_control.sig_update_fps.connect(self.grabber.set_fps)
+        
         def on_tcp_state_changed(connected: bool):
             if connected:
                 print("Global: TCP is now connected!")
@@ -83,7 +88,7 @@ class MainWindow(QMainWindow):
         container.setLayout(main_layout)
 
         self.setCentralWidget(container)
-        
+      
     def _start_grabber(self, source: int=0, mode: VideoModes=VideoModes.WEBCAM, image_list=None):
         if hasattr(self, 'grabber') and self.grabber is not None:
             self.grabber.frame_ready.disconnect()

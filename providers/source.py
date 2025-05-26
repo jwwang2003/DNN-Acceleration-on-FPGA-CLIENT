@@ -16,67 +16,55 @@ class FrameGrabber(QObject):
         fps: int = 60,
     ):
         super().__init__()
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._grab_frame)
+
+        # initial setup
+        self._fps = fps
+        self._update_interval()
+
+        # set up attrs
+        self.source = source
         self.mode = mode
         self.manual = manual
         self.image_list = image_list or []
         self.image_index = 0
+        self.cam: cv2.VideoCapture | None = None
 
-        # store current FPS, default 60
-        self._fps = fps
-
-        # build timer
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._grab_frame)
-        self._update_interval()
-
-        self.source = source
-        self.mode = mode
-        self.cam: cv2.VideoCapture = None
         if mode in (VideoModes.WEBCAM, VideoModes.VIDEO):
             self.init_camera(source)
-    
+
     def init_camera(self, source: int):
-        # open camera if needed
         self.cam = cv2.VideoCapture(source)
         if not self.cam.isOpened():
             raise RuntimeError(f"Cannot open {self.mode.name} source {source}")
 
     def _update_interval(self):
-        """Helper to recompute and set timer interval from self._fps."""
         interval_ms = max(1, int(1000 / self._fps))
         self._timer.setInterval(interval_ms)
 
     @Slot()
     def run(self):
-        """Start grabbing at whatever FPS is currently set."""
         if not self._timer.isActive():
             self._timer.start()
-        if not self.cam:
+        if self.mode in (VideoModes.WEBCAM, VideoModes.VIDEO) and not self.cam:
             self.init_camera(self.source)
-        
 
     @Slot()
     def stop(self):
-        """Stop grabbing, release resources, and quit thread."""
         self._timer.stop()
-        if self.cam:
-            pass
-            # self.cam.release()
-        # QThread.currentThread().quit()
+        # note: we keep cam around until change_source to avoid flicker
 
     @Slot(int)
     def set_fps(self, fps: int):
-        """Change FPS on the fly. Recalculates interval immediately."""
         if fps <= 0:
             return
         self._fps = fps
         self._update_interval()
-        # if the timer is already running, apply the new interval immediately
         if self._timer.isActive():
             self._timer.start()
 
     def _grab_frame(self):
-        """Internal slot called each timeout to capture & emit a frame."""
         if self.mode in (VideoModes.WEBCAM, VideoModes.VIDEO):
             ret, frame = self.cam.read()
             if not ret and self.mode == VideoModes.VIDEO:
@@ -93,3 +81,31 @@ class FrameGrabber(QObject):
             if frame is not None:
                 self.frame_ready.emit(frame)
             self.image_index = (self.image_index + 1) % len(self.image_list)
+
+    @Slot(int, object, list)
+    def change_source(self, source, mode, image_list=None):
+        """
+        Switch to a new input source *in-place*.
+        If we were grabbing, it will restart on the new source.
+        """
+        was_running = self._timer.isActive()
+        self.stop()
+
+        # release old camera if any
+        if self.cam:
+            self.cam.release()
+            self.cam = None
+
+        # update attrs
+        self.source = source
+        self.mode = mode
+        self.image_list = image_list or []
+        self.image_index = 0
+
+        # init new source if needed
+        if mode in (VideoModes.WEBCAM, VideoModes.VIDEO):
+            self.init_camera(source)
+
+        # restart if we were running
+        if was_running:
+            self.run()
