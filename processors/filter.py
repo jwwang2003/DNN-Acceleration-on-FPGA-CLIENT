@@ -18,28 +18,37 @@ class ROIFilter(QObject):
             # 2) Increase contrast
             contrast = cv2.convertScaleAbs(gray, alpha=2.0, beta=0)
 
-            # 3) Invert colors
-            inverted = cv2.bitwise_not(contrast)
+            # 3) Threshold the image to separate both dark and light regions
+            # Threshold the contrast image to create a binary image where both dark and light regions are separated
+            _, thresholded = cv2.threshold(contrast, 50, 255, cv2.THRESH_BINARY)
 
-            # 4) Thicken strokes via dilation
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (12, 12))
-            thick   = cv2.dilate(inverted, kernel, iterations=1)
+            # 4) Denoise and thicken strokes via dilation (works on both black and white regions)
+            # Invert the image so that dilation can work on both black and white regions
+            inverted = cv2.bitwise_not(thresholded)
 
-            # 5) Pad 3px border (black)
+            # Dilation: Expanding both black and white regions
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))  # Smaller kernel
+            dilated = cv2.dilate(inverted, kernel, iterations=2)  # Fewer iterations
+
+            # 5) Invert back the image
+            thickened = cv2.bitwise_not(dilated)
+
+            # 6) Pad 3px border (black)
             padded = cv2.copyMakeBorder(
-                thick,
-                top=3, bottom=3,
-                left=3, right=3,
+                thickened,
+                top=75, bottom=75,
+                left=75, right=75,
                 borderType=cv2.BORDER_CONSTANT,
-                value=0
+                value=255  # White padding
             )
 
-            # 6) Resize back to 32×32
+            # 7) Resize back to 32×32
             small = cv2.resize(padded, (32, 32), interpolation=cv2.INTER_AREA)
 
-            # 7) Convert back to BGR for uniform downstream handling
+            # 8) Convert back to BGR for uniform downstream handling
             bgr = cv2.cvtColor(small, cv2.COLOR_GRAY2BGR)
 
             processed.append(bgr)
+
 
         self.filtered_rois.emit(processed)
