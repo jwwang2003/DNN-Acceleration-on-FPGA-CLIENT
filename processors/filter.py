@@ -20,7 +20,7 @@ class ROIFilter(QObject):
 
             # 3) Threshold the image to separate both dark and light regions
             # Threshold the contrast image to create a binary image where both dark and light regions are separated
-            _, thresholded = cv2.threshold(contrast, 50, 255, cv2.THRESH_BINARY)
+            _, thresholded = cv2.threshold(contrast, 175, 255, cv2.THRESH_BINARY)
 
             # 4) Denoise and thicken strokes via dilation (works on both black and white regions)
             # Invert the image so that dilation can work on both black and white regions
@@ -35,9 +35,9 @@ class ROIFilter(QObject):
 
             # 6) Pad 3px border (black)
             padded = cv2.copyMakeBorder(
-                thickened,
-                top=75, bottom=75,
-                left=75, right=75,
+                thresholded,
+                top=35, bottom=35,
+                left=35, right=35,
                 borderType=cv2.BORDER_CONSTANT,
                 value=255  # White padding
             )

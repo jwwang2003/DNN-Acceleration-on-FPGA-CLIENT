@@ -111,5 +111,5 @@ def start_tcp_client(ip,port):
             break;
        
 if __name__=='__main__':
-        start_tcp_client('192.168.3.136',7)#
+        start_tcp_client('192.168.3.142',7)#
       

@@ -260,7 +260,7 @@ failed_count = 0
 while True:
     try:
         print("start connect to FPGA server ")
-        s.connect(('192.168.3.136',7))
+        s.connect(('192.168.3.142',7))
         break
     except socket.error:
         failed_count += 1
